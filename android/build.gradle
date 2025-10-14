@@ -63,7 +63,7 @@ android {
 }
 
 dependencies {
-    implementation 'com.github.vladiH:opencv-android:v1.0.0'
+    implementation 'org.opencv:opencv:4.12.0'
     implementation 'com.google.ai.edge.litert:litert:1.4.0'
     implementation 'com.google.ai.edge.litert:litert-api:1.4.0'
     implementation 'com.google.ai.edge.litert:litert-gpu:1.4.0'
