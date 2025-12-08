@@ -293,13 +293,14 @@ class _YoloVideoState extends State<YoloVideo> {
       return;
     }
     await controller.startImageStream((image) async {
-      // Only run if not currently detecting
+      // Skip frame if detection is off OR if we're already processing a frame
+      // Process only when: isDetecting == true (detection mode on) AND cameraImage == null (no frame being processed)
       if (isDetecting && cameraImage == null) {
         cameraImage = image;
         try {
           await yoloOnFrame(image);
         } finally {
-          cameraImage = null; // Release lock
+          cameraImage = null; // Release lock to allow next frame
         }
       }
     });

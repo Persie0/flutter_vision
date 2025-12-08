@@ -157,7 +157,17 @@ public class utils {
             
             // 1. Calculate Stride
             // If the buffer size is larger than W*H, there is padding (stride > width)
+            if (ySize % imageHeight != 0) {
+                throw new IllegalArgumentException(
+                    String.format("Invalid Y-plane size: %d bytes is not divisible by height %d", 
+                            ySize, imageHeight));
+            }
             int rowStride = ySize / imageHeight;
+            
+            if (rowStride < imageWidth) {
+                throw new IllegalArgumentException(
+                    String.format("Invalid stride: %d is less than width %d", rowStride, imageWidth));
+            }
             
             Log.d(TAG, String.format("YUV processing: Y=%d bytes, dimensions=%dx%d, stride=%d", 
                     ySize, imageWidth, imageHeight, rowStride));
