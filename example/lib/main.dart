@@ -293,9 +293,14 @@ class _YoloVideoState extends State<YoloVideo> {
       return;
     }
     await controller.startImageStream((image) async {
-      if (isDetecting) {
+      // Only run if not currently detecting
+      if (isDetecting && cameraImage == null) {
         cameraImage = image;
-        yoloOnFrame(image);
+        try {
+          await yoloOnFrame(image);
+        } finally {
+          cameraImage = null; // Release lock
+        }
       }
     });
   }
