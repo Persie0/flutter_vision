@@ -157,14 +157,18 @@ public class utils {
             
             // 1. Calculate Stride
             // If the buffer size is larger than W*H, there is padding (stride > width)
-            if (ySize % imageHeight != 0) {
+            int minExpectedSize = imageWidth * imageHeight;
+            if (ySize < minExpectedSize) {
                 throw new IllegalArgumentException(
-                    String.format("Invalid Y-plane size: %d bytes is not divisible by height %d", 
-                            ySize, imageHeight));
+                    String.format("Y-plane size too small: %d bytes < expected minimum %d", 
+                            ySize, minExpectedSize));
             }
+            
+            // Calculate row stride (may have padding)
             int rowStride = ySize / imageHeight;
             
             if (rowStride < imageWidth) {
+                // This should not happen if ySize >= width*height, but check anyway
                 throw new IllegalArgumentException(
                     String.format("Invalid stride: %d is less than width %d", rowStride, imageWidth));
             }
