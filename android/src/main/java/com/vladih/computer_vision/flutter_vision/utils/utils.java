@@ -133,7 +133,7 @@ public class utils {
     }
 
     /**
-     * Convert YUV420 bytes to bitmap with improved memory management
+     * Convert YUV420 bytes to bitmap with improved memory management and stride handling
      */
     public static Bitmap feedInputToBitmap(Context context,
                                          List<byte[]> bytesList,
@@ -152,37 +152,57 @@ public class utils {
         Bitmap rotatedBitmap = null;
         
         try {
-            // Get Y, U, V plane sizes
-            int Yb = bytesList.get(0).length;
-            int Ub = bytesList.get(1).length;
-            int Vb = bytesList.get(2).length;
+            byte[] yPlane = bytesList.get(0);
+            int ySize = yPlane.length;
             
-            Log.d(TAG, String.format("YUV plane sizes: Y=%d, U=%d, V=%d", Yb, Ub, Vb));
-            
-            // Validate plane sizes
-            int expectedSize = imageWidth * imageHeight;
-            if (Yb != expectedSize) {
-                Log.w(TAG, String.format("Y plane size mismatch: expected=%d, actual=%d", expectedSize, Yb));
+            // 1. Calculate Stride
+            // If the buffer size is larger than W*H, there is padding (stride > width)
+            int minExpectedSize = imageWidth * imageHeight;
+            if (ySize < minExpectedSize) {
+                throw new IllegalArgumentException(
+                    String.format("Y-plane size too small: %d bytes < expected minimum %d", 
+                            ySize, minExpectedSize));
             }
             
-            // Copy YUV data to single array (NV21 format: Y + V + U)
-            byte[] nv21Data = new byte[Yb + Ub + Vb];
-            System.arraycopy(bytesList.get(0), 0, nv21Data, 0, Yb);
-            System.arraycopy(bytesList.get(2), 0, nv21Data, Yb, Vb);        // V plane
-            System.arraycopy(bytesList.get(1), 0, nv21Data, Yb + Vb, Ub);   // U plane
+            // Calculate row stride (may have padding)
+            int rowStride = ySize / imageHeight;
             
-            // Convert NV21 to RGB bitmap
+            if (rowStride < imageWidth) {
+                // This should not happen if ySize >= width*height, but check anyway
+                throw new IllegalArgumentException(
+                    String.format("Invalid stride: %d is less than width %d", rowStride, imageWidth));
+            }
+            
+            Log.d(TAG, String.format("YUV processing: Y=%d bytes, dimensions=%dx%d, stride=%d", 
+                    ySize, imageWidth, imageHeight, rowStride));
+            
+            // 2. Create a clean, tightly packed NV21 buffer (Standard size: 1.5 * W * H)
+            int packedSize = (int) (imageWidth * imageHeight * 1.5);
+            byte[] nv21Data = new byte[packedSize];
+
+            // 3. Copy Y Plane row by row to remove padding
+            for (int r = 0; r < imageHeight; r++) {
+                System.arraycopy(yPlane, r * rowStride, nv21Data, r * imageWidth, imageWidth);
+            }
+
+            // 4. Handle UV Plane (Using Grayscale fallback for stability)
+            // The UV planes in bytesList are often problematic to merge correctly without more metadata.
+            // Filling them with 127 (neutral gray) keeps the image valid (grayscale) and perfect for detection.
+            int uvStartIndex = imageWidth * imageHeight;
+            java.util.Arrays.fill(nv21Data, uvStartIndex, nv21Data.length, (byte) 127);
+
+            // 5. Convert to Bitmap
             bitmapRaw = RenderScriptHelper.getBitmapFromNV21(context, nv21Data, imageWidth, imageHeight);
-            
+
             if (bitmapRaw == null) {
                 throw new Exception("Failed to convert NV21 to bitmap");
             }
-            
-            // Apply rotation if needed
+
+            // 6. Rotate
             if (rotation != 0) {
                 Matrix matrix = new Matrix();
                 matrix.postRotate(rotation);
-                rotatedBitmap = Bitmap.createBitmap(bitmapRaw, 0, 0, 
+                rotatedBitmap = Bitmap.createBitmap(bitmapRaw, 0, 0,
                         bitmapRaw.getWidth(), bitmapRaw.getHeight(), matrix, true);
                 
                 Log.d(TAG, String.format("Applied rotation: %d degrees", rotation));
@@ -190,12 +210,11 @@ public class utils {
             } else {
                 return bitmapRaw;
             }
-            
+
         } catch (Exception e) {
             Log.e(TAG, "Error processing YUV to bitmap", e);
             throw new Exception("YUV to bitmap conversion failed: " + e.getMessage());
         } finally {
-            // Clean up intermediate bitmaps
             if (rotation != 0 && bitmapRaw != null && !bitmapRaw.isRecycled()) {
                 bitmapRaw.recycle();
             }

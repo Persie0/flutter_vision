@@ -293,9 +293,16 @@ class _YoloVideoState extends State<YoloVideo> {
       return;
     }
     await controller.startImageStream((image) async {
-      if (isDetecting) {
+      // Skip frame if detection is off OR if we're already processing a frame
+      // Process only when: isDetecting == true (detection mode on) AND cameraImage == null (no frame being processed)
+      // Note: This is thread-safe in Dart because the event loop processes one event at a time
+      if (isDetecting && cameraImage == null) {
         cameraImage = image;
-        yoloOnFrame(image);
+        try {
+          await yoloOnFrame(image);
+        } finally {
+          cameraImage = null; // Release lock to allow next frame
+        }
       }
     });
   }
