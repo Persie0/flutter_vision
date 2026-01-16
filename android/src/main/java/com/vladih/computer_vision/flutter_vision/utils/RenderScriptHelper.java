@@ -54,13 +54,17 @@ public class RenderScriptHelper implements AutoCloseable {
     /**
      * Convert NV21 data to RGBA allocation with improved memory management
      */
-    public Allocation renderScriptNV21ToRGBA888(int width, int height, byte[] nv21) {
+    public Allocation renderScriptNV21ToRGBA888(int width, int height, byte[] nv21, int nv21Length) {
         if (isClosed) {
             throw new IllegalStateException("RenderScriptHelper has been closed");
         }
         
         if (nv21 == null || nv21.length == 0) {
             throw new IllegalArgumentException("Invalid NV21 data");
+        }
+
+        if (nv21Length <= 0 || nv21Length > nv21.length) {
+            throw new IllegalArgumentException("Invalid NV21 length: " + nv21Length);
         }
         
         if (width <= 0 || height <= 0) {
@@ -69,18 +73,18 @@ public class RenderScriptHelper implements AutoCloseable {
 
         try {
             // Recreate input allocation if NV21 array size changes
-            if (nv21.length != lastNv21Length || inputAllocation == null) {
+            if (nv21Length != lastNv21Length || inputAllocation == null) {
                 if (inputAllocation != null) {
                     inputAllocation.destroy();
                 }
                 
                 Type.Builder yuvTypeBuilder = new Type.Builder(rs, Element.U8(rs))
-                        .setX(nv21.length);
+                        .setX(nv21Length);
                 inputAllocation = Allocation.createTyped(rs, yuvTypeBuilder.create(), 
                         Allocation.USAGE_SCRIPT);
-                lastNv21Length = nv21.length;
+                lastNv21Length = nv21Length;
                 
-                Log.d(TAG, String.format("Created new input allocation for %d bytes", nv21.length));
+                Log.d(TAG, String.format("Created new input allocation for %d bytes", nv21Length));
             }
 
             // Recreate output allocation if dimensions change
@@ -102,13 +106,14 @@ public class RenderScriptHelper implements AutoCloseable {
 
             // Validate NV21 data size
             int expectedSize = width * height * 3 / 2; // YUV420 format
-            if (nv21.length < expectedSize) {
+            if (nv21Length < expectedSize) {
                 Log.w(TAG, String.format("NV21 data size (%d) smaller than expected (%d)", 
-                        nv21.length, expectedSize));
+                        nv21Length, expectedSize));
             }
 
             // Convert YUV to RGBA
-            inputAllocation.copyFrom(nv21);
+            // Use copy1DRangeFrom to support reused buffers that might be larger than needed
+            inputAllocation.copy1DRangeFrom(0, nv21Length, nv21);
             yuvToRgbIntrinsic.setInput(inputAllocation);
             yuvToRgbIntrinsic.forEach(outputAllocation);
 
@@ -124,6 +129,10 @@ public class RenderScriptHelper implements AutoCloseable {
      * Convert NV21 byte array to Bitmap with improved error handling
      */
     public static Bitmap getBitmapFromNV21(Context context, byte[] nv21, int width, int height) {
+        return getBitmapFromNV21(context, nv21, nv21 != null ? nv21.length : 0, width, height);
+    }
+
+    public static Bitmap getBitmapFromNV21(Context context, byte[] nv21, int nv21Length, int width, int height) {
         if (context == null) {
             throw new IllegalArgumentException("Context cannot be null");
         }
@@ -141,7 +150,7 @@ public class RenderScriptHelper implements AutoCloseable {
         
         try {
             rsHelper = getInstance(context);
-            Allocation allocation = rsHelper.renderScriptNV21ToRGBA888(width, height, nv21);
+            Allocation allocation = rsHelper.renderScriptNV21ToRGBA888(width, height, nv21, nv21Length);
             
             if (allocation == null) {
                 throw new Exception("Failed to create RGBA allocation");
