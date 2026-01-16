@@ -44,6 +44,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
     private FlutterAssets assets;
     private Yolo yolo_model;
     private ExecutorService executor;
+    private byte[] nv21Buffer = null;
     
     private final AtomicBoolean isDetecting = new AtomicBoolean(false);
     private static final ArrayList<Map<String, Object>> EMPTY_RESULT = new ArrayList<>();
@@ -93,6 +94,8 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
             this.assets = null;
             close_yolo();
             
+            this.nv21Buffer = null;
+
             if (this.executor != null && !this.executor.isShutdown()) {
                 this.executor.shutdownNow();
                 this.executor = null;
@@ -205,6 +208,17 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
         }
     }
 
+    /**
+     * Get or create a reusable buffer for NV21 data
+     */
+    public synchronized byte[] getNv21Buffer(int minSize) {
+        if (nv21Buffer == null || nv21Buffer.length < minSize) {
+            Log.d(TAG, String.format("Allocating new NV21 buffer: %d bytes", minSize));
+            nv21Buffer = new byte[minSize];
+        }
+        return nv21Buffer;
+    }
+
     private void yoloOnFrame(Map<String, Object> args, Result result) {
         if (yolo_model == null) {
             result.error("MODEL_NOT_LOADED", "YOLO model not loaded", null);
@@ -212,7 +226,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
         }
         
         if (isDetecting.compareAndSet(false, true)) {
-            DetectionTask detectionTask = new DetectionTask(yolo_model, args, "frame", result, isDetecting);
+            DetectionTask detectionTask = new DetectionTask(this, yolo_model, args, "frame", result, isDetecting);
             executor.submit(detectionTask);
         } else {
             // Return empty result if already detecting
@@ -227,7 +241,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
         }
         
         if (isDetecting.compareAndSet(false, true)) {
-            DetectionTask detectionTask = new DetectionTask(yolo_model, args, "img", result, isDetecting);
+            DetectionTask detectionTask = new DetectionTask(this, yolo_model, args, "img", result, isDetecting);
             executor.submit(detectionTask);
         } else {
             // Return empty result if already detecting
@@ -295,6 +309,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
      * Enhanced DetectionTask with better error handling and memory management
      */
     private static class DetectionTask implements Runnable {
+        private final FlutterVisionPlugin plugin;
         private final Yolo yolo;
         private final byte[] image;
         private final List<byte[]> frame;
@@ -307,8 +322,9 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
         private final Result result;
         private final AtomicBoolean isDetecting;
 
-        public DetectionTask(Yolo yolo, Map<String, Object> args, String type, 
+        public DetectionTask(FlutterVisionPlugin plugin, Yolo yolo, Map<String, Object> args, String type,
                            Result result, AtomicBoolean isDetecting) {
+            this.plugin = plugin;
             this.yolo = yolo;
             this.type = type;
             this.result = result;
@@ -339,7 +355,15 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
                 if ("img".equals(type)) {
                     bitmap = BitmapFactory.decodeByteArray(image, 0, image.length);
                 } else {
-                    bitmap = utils.feedInputToBitmap(yolo.getContext(), frame, imageHeight, imageWidth, yolo.getRotation());
+                    // Reuse buffer for frame processing
+                    int Yb = frame.get(0).length;
+                    int Ub = frame.get(1).length;
+                    int Vb = frame.get(2).length;
+                    int requiredSize = Yb + Ub + Vb;
+
+                    byte[] buffer = plugin.getNv21Buffer(requiredSize);
+
+                    bitmap = utils.feedInputToBitmap(yolo.getContext(), frame, imageHeight, imageWidth, yolo.getRotation(), buffer);
                 }
                 
                 if (bitmap == null) {

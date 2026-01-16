@@ -140,6 +140,18 @@ public class utils {
                                          int imageHeight,
                                          int imageWidth,
                                          int rotation) throws Exception {
+        return feedInputToBitmap(context, bytesList, imageHeight, imageWidth, rotation, null);
+    }
+
+    /**
+     * Convert YUV420 bytes to bitmap with improved memory management and reusable buffer support
+     */
+    public static Bitmap feedInputToBitmap(Context context,
+                                         List<byte[]> bytesList,
+                                         int imageHeight,
+                                         int imageWidth,
+                                         int rotation,
+                                         byte[] reusableBuffer) throws Exception {
         if (context == null) {
             throw new IllegalArgumentException("Context cannot be null");
         }
@@ -156,6 +168,7 @@ public class utils {
             int Yb = bytesList.get(0).length;
             int Ub = bytesList.get(1).length;
             int Vb = bytesList.get(2).length;
+            int totalSize = Yb + Ub + Vb;
             
             Log.d(TAG, String.format("YUV plane sizes: Y=%d, U=%d, V=%d", Yb, Ub, Vb));
             
@@ -165,14 +178,23 @@ public class utils {
                 Log.w(TAG, String.format("Y plane size mismatch: expected=%d, actual=%d", expectedSize, Yb));
             }
             
+            // Use reusable buffer if available and large enough
+            byte[] nv21Data = reusableBuffer;
+            if (nv21Data == null || nv21Data.length < totalSize) {
+                if (nv21Data != null) {
+                    Log.w(TAG, String.format("Reusable buffer too small (%d < %d), allocating new one",
+                            nv21Data.length, totalSize));
+                }
+                nv21Data = new byte[totalSize];
+            }
+
             // Copy YUV data to single array (NV21 format: Y + V + U)
-            byte[] nv21Data = new byte[Yb + Ub + Vb];
             System.arraycopy(bytesList.get(0), 0, nv21Data, 0, Yb);
             System.arraycopy(bytesList.get(2), 0, nv21Data, Yb, Vb);        // V plane
             System.arraycopy(bytesList.get(1), 0, nv21Data, Yb + Vb, Ub);   // U plane
             
             // Convert NV21 to RGB bitmap
-            bitmapRaw = RenderScriptHelper.getBitmapFromNV21(context, nv21Data, imageWidth, imageHeight);
+            bitmapRaw = RenderScriptHelper.getBitmapFromNV21(context, nv21Data, totalSize, imageWidth, imageHeight);
             
             if (bitmapRaw == null) {
                 throw new Exception("Failed to convert NV21 to bitmap");

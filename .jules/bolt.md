@@ -1,0 +1,3 @@
+## 2024-05-22 - [Buffer Reuse for NV21 Data]
+**Learning:** Reusing byte arrays for camera frames in Android MethodChannels significantly reduces GC pressure. When dealing with variable-sized buffers (like reusable pools), RenderScript Allocations require careful handling: use `copy1DRangeFrom` with the specific data length instead of `copyFrom`, as the buffer capacity may exceed the current frame's data size.
+**Action:** Always check if a frequently allocated buffer in a hot loop (like camera callbacks) can be pooled, and ensure downstream consumers (like RenderScript or Native code) respect the *valid data length* rather than the *buffer capacity*.
