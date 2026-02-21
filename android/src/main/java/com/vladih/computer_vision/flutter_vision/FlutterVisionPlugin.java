@@ -42,7 +42,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
     private MethodChannel methodChannel;
     private Context context;
     private FlutterAssets assets;
-    private Yolo yolo_model;
+    private volatile Yolo yolo_model;
     private ExecutorService executor;
     private byte[] nv21Buffer = null;
     
@@ -145,40 +145,50 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
     }
 
     private void loadYoloModel(Map<String, Object> args, Result result) {
+        if (args == null) {
+            result.error("INVALID_ARGS", "Arguments cannot be null", null);
+            return;
+        }
+
         try {
-            if (args == null) {
-                result.error("INVALID_ARGS", "Arguments cannot be null", null);
-                return;
-            }
-            
-            // Extract and validate parameters
-            String modelPath = getStringArgument(args, "modelPath");
-            String labelPath = getStringArgument(args, "labels");
-            String version = getStringArgument(args, "modelVersion");
-            
+            // Extract and validate parameters before submitting to background thread
+            final String modelPath = getStringArgument(args, "modelPath");
+            final String labelPath = getStringArgument(args, "labels");
+            final String version = getStringArgument(args, "modelVersion");
+
             final boolean isAsset = getBooleanArgument(args, "isAsset", false);
             final int numThreads = getIntArgument(args, "numThreads", 4);
             final boolean quantization = getBooleanArgument(args, "quantization", false);
             final boolean useGpu = getBooleanArgument(args, "useGpu", false);
             final int rotation = getIntArgument(args, "rotation", 0);
-            
-            // Resolve paths
-            String resolvedModelPath = isAsset ? this.assets.getAssetFilePathByName(modelPath) : modelPath;
-            String resolvedLabelPath = isAsset ? this.assets.getAssetFilePathByName(labelPath) : labelPath;
-            
-            Log.d(TAG, String.format("Loading YOLO model: version=%s, threads=%d, gpu=%b, quantized=%b", 
-                    version, numThreads, useGpu, quantization));
-            
-            // Create appropriate model instance
-            yolo_model = createYoloModel(version, context, resolvedModelPath, isAsset, 
-                    numThreads, quantization, useGpu, resolvedLabelPath, rotation);
-            
-            // Initialize the model
-            yolo_model.initialize_model();
-            
-            Log.d(TAG, "YOLO model loaded successfully: " + version);
-            result.success("Model loaded successfully");
-            
+
+            // Resolve asset paths on the main thread (requires Flutter assets context)
+            final String resolvedModelPath = isAsset ? this.assets.getAssetFilePathByName(modelPath) : modelPath;
+            final String resolvedLabelPath = isAsset ? this.assets.getAssetFilePathByName(labelPath) : labelPath;
+
+            final Context appContext = this.context;
+
+            executor.submit(() -> {
+                try {
+                    Log.d(TAG, String.format("Loading YOLO model: version=%s, threads=%d, gpu=%b, quantized=%b",
+                            version, numThreads, useGpu, quantization));
+
+                    Yolo model = createYoloModel(version, appContext, resolvedModelPath, isAsset,
+                            numThreads, quantization, useGpu, resolvedLabelPath, rotation);
+
+                    model.initialize_model();
+
+                    // Assign on background thread; detection tasks also run on this same
+                    // single-thread executor so ordering is guaranteed.
+                    yolo_model = model;
+
+                    Log.d(TAG, "YOLO model loaded successfully: " + version);
+                    result.success("Model loaded successfully");
+                } catch (Exception e) {
+                    Log.e(TAG, "Error loading YOLO model", e);
+                    result.error("MODEL_LOAD_ERROR", "Failed to load YOLO model: " + e.getMessage(), e);
+                }
+            });
         } catch (Exception e) {
             Log.e(TAG, "Error loading YOLO model", e);
             result.error("MODEL_LOAD_ERROR", "Failed to load YOLO model: " + e.getMessage(), e);
