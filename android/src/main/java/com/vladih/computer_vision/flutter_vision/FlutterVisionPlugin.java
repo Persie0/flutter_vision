@@ -44,7 +44,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
     private MethodChannel methodChannel;
     private Context context;
     private FlutterAssets assets;
-    private Yolo yolo_model;
+    private volatile Yolo yolo_model;
     private ExecutorService executor;
     
     private final AtomicBoolean isDetecting = new AtomicBoolean(false);
@@ -167,17 +167,29 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
             
             Log.d(TAG, String.format("Loading YOLO model: version=%s, threads=%d, gpu=%b, quantized=%b", 
                     version, numThreads, useGpu, quantization));
-            
+
+            // Capture context as a final local variable to avoid a NullPointerException
+            // if cleanup() sets this.context = null before the background task runs.
+            final Context capturedContext = this.context;
+            if (capturedContext == null) {
+                result.error("PLUGIN_ERROR", "Plugin context is not available", null);
+                return;
+            }
+
             executor.submit(new Runnable() {
                 @Override
                 public void run() {
                     try {
-                        // Create appropriate model instance
-                        yolo_model = createYoloModel(version, context, resolvedModelPath, isAsset,
-                                numThreads, quantization, useGpu, resolvedLabelPath, rotation);
+                        // Create and initialize the model locally to avoid publishing a partially
+                        // initialized instance to the shared volatile field.
+                        Yolo localModel = createYoloModel(version, capturedContext, resolvedModelPath,
+                                isAsset, numThreads, quantization, useGpu, resolvedLabelPath, rotation);
 
-                        // Initialize the model
-                        yolo_model.initialize_model();
+                        // Initialize the model before publishing it to the shared field.
+                        localModel.initialize_model();
+
+                        // Publish fully initialized model.
+                        yolo_model = localModel;
 
                         Log.d(TAG, "YOLO model loaded successfully: " + version);
                         new Handler(Looper.getMainLooper()).post(new Runnable() {
