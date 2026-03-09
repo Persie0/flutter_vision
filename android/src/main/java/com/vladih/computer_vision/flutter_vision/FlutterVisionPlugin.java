@@ -3,6 +3,8 @@ package com.vladih.computer_vision.flutter_vision;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -42,7 +44,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
     private MethodChannel methodChannel;
     private Context context;
     private FlutterAssets assets;
-    private Yolo yolo_model;
+    private volatile Yolo yolo_model;
     private ExecutorService executor;
     
     private final AtomicBoolean isDetecting = new AtomicBoolean(false);
@@ -141,7 +143,7 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
         }
     }
 
-    private void loadYoloModel(Map<String, Object> args, Result result) {
+    private void loadYoloModel(Map<String, Object> args, final Result result) {
         try {
             if (args == null) {
                 result.error("INVALID_ARGS", "Arguments cannot be null", null);
@@ -149,9 +151,9 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
             }
             
             // Extract and validate parameters
-            String modelPath = getStringArgument(args, "modelPath");
-            String labelPath = getStringArgument(args, "labels");
-            String version = getStringArgument(args, "modelVersion");
+            final String modelPath = getStringArgument(args, "modelPath");
+            final String labelPath = getStringArgument(args, "labels");
+            final String version = getStringArgument(args, "modelVersion");
             
             final boolean isAsset = getBooleanArgument(args, "isAsset", false);
             final int numThreads = getIntArgument(args, "numThreads", 4);
@@ -160,25 +162,57 @@ public class FlutterVisionPlugin implements FlutterPlugin, MethodCallHandler {
             final int rotation = getIntArgument(args, "rotation", 0);
             
             // Resolve paths
-            String resolvedModelPath = isAsset ? this.assets.getAssetFilePathByName(modelPath) : modelPath;
-            String resolvedLabelPath = isAsset ? this.assets.getAssetFilePathByName(labelPath) : labelPath;
+            final String resolvedModelPath = isAsset ? this.assets.getAssetFilePathByName(modelPath) : modelPath;
+            final String resolvedLabelPath = isAsset ? this.assets.getAssetFilePathByName(labelPath) : labelPath;
             
             Log.d(TAG, String.format("Loading YOLO model: version=%s, threads=%d, gpu=%b, quantized=%b", 
                     version, numThreads, useGpu, quantization));
-            
-            // Create appropriate model instance
-            yolo_model = createYoloModel(version, context, resolvedModelPath, isAsset, 
-                    numThreads, quantization, useGpu, resolvedLabelPath, rotation);
-            
-            // Initialize the model
-            yolo_model.initialize_model();
-            
-            Log.d(TAG, "YOLO model loaded successfully: " + version);
-            result.success("Model loaded successfully");
+
+            // Capture context as a final local variable to avoid a NullPointerException
+            // if cleanup() sets this.context = null before the background task runs.
+            final Context capturedContext = this.context;
+            if (capturedContext == null) {
+                result.error("PLUGIN_ERROR", "Plugin context is not available", null);
+                return;
+            }
+
+            executor.submit(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        // Create and initialize the model locally to avoid publishing a partially
+                        // initialized instance to the shared volatile field.
+                        Yolo localModel = createYoloModel(version, capturedContext, resolvedModelPath,
+                                isAsset, numThreads, quantization, useGpu, resolvedLabelPath, rotation);
+
+                        // Initialize the model before publishing it to the shared field.
+                        localModel.initialize_model();
+
+                        // Publish fully initialized model.
+                        yolo_model = localModel;
+
+                        Log.d(TAG, "YOLO model loaded successfully: " + version);
+                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                            @Override
+                            public void run() {
+                                result.success("Model loaded successfully");
+                            }
+                        });
+                    } catch (final Exception e) {
+                        Log.e(TAG, "Error loading YOLO model", e);
+                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                            @Override
+                            public void run() {
+                                result.error("MODEL_LOAD_ERROR", "Failed to load YOLO model: " + e.getMessage(), e);
+                            }
+                        });
+                    }
+                }
+            });
             
         } catch (Exception e) {
-            Log.e(TAG, "Error loading YOLO model", e);
-            result.error("MODEL_LOAD_ERROR", "Failed to load YOLO model: " + e.getMessage(), e);
+            Log.e(TAG, "Error preparing to load YOLO model", e);
+            result.error("MODEL_LOAD_ERROR", "Failed to prepare loading YOLO model: " + e.getMessage(), e);
         }
     }
 
